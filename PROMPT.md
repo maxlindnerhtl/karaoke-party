@@ -38,7 +38,8 @@ Check the PC
   `rubberband`. On Windows the installer downloads a suitable ffmpeg itself; on Linux, if the distribution's ffmpeg
   lacks it, tell me the package to install (that needs sudo: ask first). adb comes from Android SDK Platform-Tools:
   if it's missing, offer to download the official zip to a folder in my user directory (no admin needed) and use it
-  from there.
+  from there. Once `.venv` exists, record it for the uninstaller:
+  `<venv python> server/install_manifest.py add pc.tools '{"name": "adb", "path": "<folder>", "installed_by_us": true}'`.
 
 Configure and install
 - Ask me for my music folder. Check it exists and how many audio files (mp3, m4a, flac, ogg, wav) it has; never
@@ -46,19 +47,23 @@ Configure and install
   used.
 - Ask me to pick a host PIN (for the host page), and whether I have a YouTube Data API v3 key for songs that aren't
   in my library (optional; if I want one, explain briefly how to create it in the Google Cloud console).
-- Run the installer: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1` on Windows, `scripts/install.sh`
-  on Linux. It creates `.env` from `.env.example`: fill in `MUSIC_PATH`, `HOST_PIN` and `YT_API_KEY` yourself and show
-  me the result with the PIN and key masked. Before its admin step, explain what it will do (firewall rules for TCP
-  8765 and UDP 8766 on Private networks only, autostart at logon on Windows; ufw/firewalld rules and
-  `loginctl enable-linger` on Linux) and ask me. If I say no, explain how to start the server by hand instead.
-- Windows: check the network profile of the active connection (`Get-NetConnectionProfile`). If it is Public, the
-  firewall rules don't apply and the TV can't reach the server: ask me before switching it to Private (admin).
-- Confirm torch sees the GPU (`uv run python -c "import torch; print(torch.cuda.is_available())"`), or that the CPU
-  fallback is what I chose.
+- Before running the installer, explain its admin steps and ask me in chat (it can't read answers from your shell):
+  firewall rules for TCP 8765 and UDP 8766 on Private networks only and autostart at logon on Windows; on Windows
+  also check the network profile (`Get-NetConnectionProfile`): if the active network is Public, the TV can't reach
+  the server, and the installer can switch it to Private (it remembers the old setting for the uninstaller). On
+  Linux: ufw rules and `loginctl enable-linger`, which need sudo (if sudo needs a password, ask me to run those lines
+  myself with `!`).
+- Run it: Windows `powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Yes` if I agreed to everything
+  (a UAC prompt follows: tell me), or `-SkipAdmin` if I said no to the admin steps; Linux `scripts/install.sh --yes`
+  (add `--no-service` if I don't want autostart). It records what it changes in `data/install-manifest.json`. It
+  creates `.env` from `.env.example`: fill in `MUSIC_PATH`, `HOST_PIN` and `YT_API_KEY` yourself and show me the
+  result with the PIN and key masked. If I declined autostart, explain how to start the server by hand.
+- Confirm torch sees the GPU (`.venv/bin/python` or `.venv\Scripts\python.exe`
+  `-c "import torch; print(torch.cuda.is_available())"`), or that the CPU fallback is what I chose.
 
 Start the server
 - Start it: the tray app on Windows (`.venv\Scripts\pythonw.exe -m server.tray`), the systemd user service on Linux
-  (`systemctl --user start karaoke-party`), or `uv run python -m server` if I declined autostart. Only one server
+  (`systemctl --user start karaoke-party`), or the venv's Python with `-m server` if I declined autostart. Only one server
   may run: if port 8765 is taken, find out what holds it and ask me before stopping anything.
 - Check `http://127.0.0.1:8765/api/queue` answers, find the PC's LAN IP, and ask me to open `http://<PC IP>:8765/`
   on my phone (same Wi-Fi). If it doesn't load, go through the firewall/network-profile checks in README
@@ -120,4 +125,5 @@ Finish
   off, Network/ADB debugging or Wireless debugging off, and "Revoke USB debugging authorizations"; then
   `adb disconnect`. The grants stay in place. To update the app later, switch debugging on again and rerun
   `scripts/tv_setup.py` with the new APK.
-- Point me to the "Customize it with Claude Code" section of the README.
+- Point me to the "Customize it with Claude Code" section of the README, and to `UNINSTALL.md` for removing
+  everything again later.

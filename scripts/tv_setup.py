@@ -23,6 +23,10 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from server import install_manifest, tv_listeners  # noqa: E402  (standard library only)
 
 PACKAGE = "io.github.maxlindnerhtl.karaokeparty"
 LISTENER = "com.karaoke.tv.yt.YtNotificationListener"
@@ -88,22 +92,35 @@ def grant_listener(a: Adb, sdk: int, component: str) -> bool:
             print(f"    {out}")
     else:
         current = a.shell("settings get secure enabled_notification_listeners").strip()
-        entries = [e for e in current.split(":") if e and e != "null"]
-        if component not in entries:
-            entries.append(component)   # keep the other apps' listeners
-            a.shell(f"settings put secure enabled_notification_listeners '{':'.join(entries)}'")
-    granted = component in a.shell("settings get secure enabled_notification_listeners", check=False)
+        if not tv_listeners.contains(current, component):
+            # keep the other apps' listeners
+            a.shell(f"settings put secure enabled_notification_listeners '{tv_listeners.add(current, component)}'")
+    granted = tv_listeners.contains(a.shell("settings get secure enabled_notification_listeners", check=False), component)
     print(f"    {'granted' if granted else 'NOT granted: YouTube songs will return after a timer instead'}")
     return granted
 
 
-def grant_overlay(a: Adb, sdk: int, package: str):
+def grant_overlay(a: Adb, sdk: int, package: str) -> bool:
     if sdk < 29:
-        return   # before Android 10 a background app may bring itself to the front anyway
+        return False   # before Android 10 a background app may bring itself to the front anyway
     step("Display over other apps (lets the app come back after a YouTube song, Android 10+)")
     out = a.shell(f"appops set {package} SYSTEM_ALERT_WINDOW allow", check=False)
     mode = a.shell(f"appops get {package} SYSTEM_ALERT_WINDOW", check=False)
     print(f"    {out or mode}")
+    return "allow" in mode
+
+
+def record(device: str, package: str, sdk: int, listeners_before: str, overlay: bool):
+    """Notes in data/install-manifest.json what this script changed on the TV, for scripts/tv_uninstall.py. The
+    listener value from before the first grant is kept across reruns."""
+    data = install_manifest.load()
+    tv = dict(data.get("tv", {}).get(device) or {})   # device names contain dots: no dotted-key lookup
+    tv.setdefault("listeners_before", listeners_before)
+    tv.update(package=package, sdk=sdk)
+    if overlay:
+        tv["appops"] = sorted(set(tv.get("appops", [])) | {"SYSTEM_ALERT_WINDOW"})
+    data.setdefault("tv", {})[device] = tv
+    install_manifest.save(data)
 
 
 def main():
@@ -137,8 +154,13 @@ def main():
     if args.package not in a.shell(f"pm list packages {args.package}", check=False):
         sys.exit(f"    {args.package} is not installed: pass --apk <file>")
 
-    grant_listener(a, sdk, f"{args.package}/{LISTENER}")
-    grant_overlay(a, sdk, args.package)
+    component = f"{args.package}/{LISTENER}"
+    before = a.shell("settings get secure enabled_notification_listeners", check=False).strip()
+    if tv_listeners.contains(before, component):
+        before = tv_listeners.remove(before, component) or "null"   # rerun: the value without our entry
+    grant_listener(a, sdk, component)
+    overlay = grant_overlay(a, sdk, args.package)
+    record(serial or "default", args.package, sdk, before, overlay)
     if "youtube" not in a.shell("pm list packages youtube", check=False):
         print("    note: no YouTube app found; YouTube entries can't play (library songs work)")
 

@@ -1,6 +1,6 @@
 [project]
 name = "karaoke-party"
-version = "0.1.0"
+version = "0.1.1"
 description = "LAN karaoke for house parties: vocal removal and synced lyrics on your PC, a lyrics player on Android TV"
 license = "GPL-3.0-or-later"
 requires-python = "==3.11.*"

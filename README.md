@@ -139,7 +139,7 @@ Keep your changes on a branch (or a fork) so you can pull updates later; Claude 
 | **Nightly batch** | set a time on the host page: starred and most-played songs get prepared overnight |
 | **Wake-on-LAN** | "Wake PC" on the TV's offline screen (PC on Ethernet with WoL enabled; `PC_MAC` for another adapter) |
 
-**Try it without music:** `uv run python scripts/demo_data.py create` builds a small made-up library with ready
+**Try it without music:** `python scripts/demo_data.py create` (with the venv's Python) builds a small made-up library with ready
 renders; the script's docstring shows how to start a server on it.
 
 ## Manual setup
@@ -174,13 +174,13 @@ The same steps the prompt runs, if you'd rather do them yourself.
    without admin rights).
 3. Fill in `.env` (see the comments in `.env.example`): `MUSIC_PATH` (your music folder; nothing is ever written
    there), `HOST_PIN` (pick one), optionally `YT_API_KEY`.
-4. Set your network to **Private** (Settings → Network & internet → Wi-Fi/Ethernet → your network → Network profile
-   type). The firewall rules only apply there.
+4. Your network must be **Private** (the firewall rules only apply there). If it's Public, the installer offers to
+   switch it (admin) and remembers the old setting for the uninstaller; or change it yourself under Settings →
+   Network & internet → your network → Network profile type.
 5. Start it: log off and on, or run `.venv\Scripts\pythonw.exe -m server.tray`. The tray icon opens the host page.
 6. Check it: open `http://<PC IP>:8765/` on a phone in the same Wi-Fi.
 
-Remove the firewall rules and the autostart task:
-`powershell -ExecutionPolicy Bypass -File scripts\install.ps1 -Uninstall`.
+To remove it again, see [Uninstall](#uninstall).
 
 </details>
 
@@ -202,10 +202,10 @@ Remove the firewall rules and the autostart task:
    `loginctl enable-linger` command if the server should start at boot without a login.
 3. Fill in `.env` (`MUSIC_PATH`, `HOST_PIN`, optionally `YT_API_KEY`).
 4. Start it: `systemctl --user start karaoke-party` (logs: `journalctl --user -u karaoke-party` and `data/logs/`).
-   Without the service: `uv run python -m server`.
+   Without the service: `.venv/bin/python -m server`.
 5. Check it: open `http://<PC IP>:8765/` on a phone in the same Wi-Fi.
 
-Remove the service: `scripts/install.sh --uninstall`.
+To remove it again, see [Uninstall](#uninstall).
 
 </details>
 
@@ -257,6 +257,36 @@ release build (different signature): `adb uninstall io.github.maxlindnerhtl.kara
 
 </details>
 
+## Uninstall
+
+Paste [`UNINSTALL.md`](UNINSTALL.md) into Claude Code in your Karaoke Party folder. It lists everything it will remove
+first, offers to export your party stats, removes the app from the TV (keeping every other app's settings), undoes
+what the installer changed on the PC, and walks you through switching ADB off on the TV again. Your music folder is
+never touched.
+
+The installers record what they change in `data/install-manifest.json` (tasks, firewall rules, a changed network
+profile, tools they installed, model downloads, the TV's original listener setting), so the uninstall removes exactly
+that and nothing you had before.
+
+<details>
+<summary><b>Uninstall by hand</b></summary>
+
+1. **TV first** (debugging still on): `python scripts/tv_uninstall.py --tv <TV IP>`. It uninstalls the app, removes
+   its grants, and checks that the other apps' notification listeners are untouched.
+2. **Optional:** `python scripts/export_stats.py` saves most sung songs, top singers and the play history to your
+   home folder.
+3. **PC:** `powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1` (Windows) or `scripts/uninstall.sh`
+   (Linux). It shows what it will remove and asks before each part: stopping the server, the autostart task/service
+   and firewall rules (admin), the network profile (only if the installer changed it), `.venv`, the data folder and
+   the downloaded models (with sizes), and the tools the installer added. Flags: `-KeepData`, `-KeepTools`,
+   `-KeepNetworkProfile` / `--keep-data`, `--keep-tools`, `--keep-linger`.
+4. **Switch ADB off on the TV:** Developer options → USB debugging off, Network/ADB or Wireless debugging off,
+   "Revoke USB debugging authorizations", then restart the TV. Check:
+   `python scripts/tv_uninstall.py --check-adb-closed <TV IP>` must say the port refuses connections.
+5. Delete the Karaoke Party folder (code and `.env`).
+
+</details>
+
 ## Troubleshooting
 
 Easiest: open Claude Code in your clone and describe what's wrong; it knows the gotchas below (`CLAUDE.md`).
@@ -287,7 +317,7 @@ Install an ffmpeg with rubberband (the error message says how for your OS) or se
 <summary><b>Songs take many minutes / the host page says "No CUDA GPU found"</b></summary>
 
 Processing runs on the CPU. With an NVIDIA GPU, install or update the driver (570+) and check
-`uv run python -c "import torch; print(torch.cuda.is_available())"`. Without one: queue early, use the nightly batch,
+`.venv/bin/python -c "import torch; print(torch.cuda.is_available())"` (Windows: `.venv\Scripts\python.exe`). Without one: queue early, use the nightly batch,
 or set `WHISPER_MODEL=small` for faster (less accurate) transcription.
 
 </details>

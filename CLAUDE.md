@@ -11,7 +11,11 @@ and ask before anything that changes their system beyond this repo.
 3. `.env.example`: every setting. The user's `.env` holds their PIN and API key: never print them unmasked, never
    commit them.
 4. For setup: `PROMPT.md` is the step-by-step plan; `scripts/install.ps1`, `scripts/install.sh` and
-   `scripts/tv_setup.py` do most of the work.
+   `scripts/tv_setup.py` do most of the work. For removal: `UNINSTALL.md`, `scripts/uninstall.ps1`,
+   `scripts/uninstall.sh`, `scripts/tv_uninstall.py`.
+5. `data/install-manifest.json` (if it exists): what the installers changed on this PC and TV. Anything you install
+   or change for the user (a tool, a rule, a TV setting) goes in there too (`server/install_manifest.py`), so the
+   uninstaller can undo it; never remove something that isn't in it or clearly ours.
 
 Map: `server/` (FastAPI app, worker, pipeline, SQLite), `web/` (phone + host pages, vanilla JS, no build step),
 `tvapp/` (Android TV app, Kotlin, classic Views; colors/sizes/timings in `Theme.kt`), `scripts/`, `tests/`,
@@ -33,6 +37,11 @@ Map: `server/` (FastAPI app, worker, pipeline, SQLite), `web/` (phone + host pag
   `pm clear`). Uninstall only our own app (`io.github.maxlindnerhtl.karaokeparty`), and only after asking.
 - Never download audio/video from YouTube or anywhere else, and don't add music or lyrics to the repo. Tests, docs
   and screenshots use invented songs only (`scripts/demo_data.py`).
+- The installers and uninstallers ask on the terminal, which you can't answer: ask the user in chat, then run them
+  with `-Yes`/`--yes` and the `-Keep*`/`--keep-*` or `-SkipAdmin`/`--no-service` flags that match the answers.
+- Only touch tasks, rules, services and apps by their exact names (`Karaoke Party server`, `KaraokeParty-Server-TCP`,
+  `KaraokeParty-Discovery-UDP`, `karaoke-party.service`, `io.github.maxlindnerhtl.karaokeparty`), never by a pattern
+  like `Karaoke*`: the user may have other things with similar names.
 - Don't expose the server beyond the LAN (no port forwarding, tunnels or `0.0.0.0` firewall rules for Public
   networks).
 

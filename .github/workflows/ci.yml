@@ -40,6 +40,34 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors; exit 1 }
 
+  linux-roundtrip:
+    name: Linux install + uninstall round trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install into a fresh folder (no ML stack, no service; ufw rules via passwordless sudo)
+        run: |
+          mkdir -p "$RUNNER_TEMP/kp" && cp -r . "$RUNNER_TEMP/kp" && rm -rf "$RUNNER_TEMP/kp/.git"
+          cd "$RUNNER_TEMP/kp"
+          printf 'DATA_DIR=%s\n' "$RUNNER_TEMP/kp-data" >> .env.example
+          scripts/install.sh --no-service --no-ml --yes
+          # what a server run would create in the data dir
+          mkdir -p "$RUNNER_TEMP/kp-data/logs" && echo x > "$RUNNER_TEMP/kp-data/karaoke.db"
+          cat data/install-manifest.json
+          sudo ufw show added
+      - name: Uninstall and check nothing is left
+        run: |
+          cd "$RUNNER_TEMP/kp"
+          ours() { python3 -c "import json,sys; d=json.load(open('data/install-manifest.json')); print(next((t['path'] for t in d['pc']['tools'] if t['name']==sys.argv[1] and t['installed_by_us']), ''))" "$1"; }
+          uv="$(ours uv)"; py="$(ours python)"
+          echo "installed by us: uv=${uv:-no} python=${py:-no}"
+          scripts/uninstall.sh --yes
+          fail=0
+          for p in .venv data "$RUNNER_TEMP/kp-data" $uv $py; do [ -e "$p" ] && { echo "left behind: $p"; fail=1; }; done
+          sudo ufw show added | grep -q 'Karaoke Party' && { echo "left behind: ufw rules"; fail=1; }
+          pgrep -f "$RUNNER_TEMP/kp/.venv" && { echo "left behind: processes"; fail=1; }
+          exit $fail
+
   tvapp:
     name: TV app build, unit tests, lint
     runs-on: ubuntu-latest

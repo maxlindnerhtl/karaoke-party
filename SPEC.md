@@ -167,6 +167,16 @@ never shell out to another ffmpeg. No ffprobe needed (durations and tags come fr
   handlers.
 - **Linux:** `scripts/install.sh` installs uv, Python and the env, checks ffmpeg, and installs a systemd *user*
   service running `python -m server`. Linger and firewall rules (ufw/firewalld) are printed, or run after asking.
+- **Install manifest** `data/install-manifest.json` (`server/install_manifest.py`, standard library only): the
+  installers record the task/service, firewall/ufw rules, linger, a changed network profile (with the previous
+  category), the tools they installed or found (`installed_by_us`), and the data dir; the worker records model cache
+  entries that appeared during a model's first load (entries that already existed, e.g. shared with another app, are
+  never recorded); `tv_setup.py` records per TV the listener value from before the first grant and the appops it
+  granted. **Uninstall:** `scripts/uninstall.ps1` / `uninstall.sh` undo exactly that (asking before admin steps,
+  deletions with sizes, and tools; never the music folder; tasks/rules/apps only by exact name), and detect what's
+  there for installs without a manifest. `scripts/tv_uninstall.py` revokes the appops, uninstalls the app, removes
+  only our listener entry if Android left it, and verifies the other entries. `UNINSTALL.md` is the Claude Code
+  prompt for all of it, ending with switching ADB off and checking that port 5555 refuses connections.
 - Rotating logs in `data/logs`.
 - One server at a time (port check); one worker claims jobs (`data/worker.lock`). The worker watches its parent
   (Windows process handle, Linux pidfd); if the server dies it finishes the current job and exits.
@@ -276,6 +286,11 @@ Decisions from development, kept for the reasoning behind them.
 - TV icon and banner: an original mark (a microphone and three lyric lines, the first half "sung"), defined once in
   `tvapp/art/build.py`, which writes the SVG sources, the adaptive icon (Android 8+), legacy PNGs for all densities
   and the 320×180 banner.
+- **2026-10-27, uninstall path (v0.1.1):** installers record their changes in an install manifest; uninstallers
+  undo exactly those. The public installer's task and firewall rule names (`Karaoke Party server`, `KaraokeParty-*`)
+  differ from older private installs (`Karaoke server`, `Karaoke-*`), so both can exist on one PC. The uv installer
+  runs with `UV_NO_MODIFY_PATH` (no PATH or shell-rc changes to undo). Android 7 removes an uninstalled app's
+  notification-listener entry by itself (verified on a real TV); tv_uninstall.py still checks and cleans up.
 - **2026-10-27, public release:** Windows + Linux, CUDA with CPU fallback, optional `FFMPEG_PATH`, targetSdk 35 with
   `<queries>`, graded YouTube matching, adb-only setup script, signed release APKs via GitHub Releases, CI with
   emulator tests. License GPL-3.0-or-later (mutagen is GPL-2.0-or-later; ffmpeg/rubberband are not bundled).

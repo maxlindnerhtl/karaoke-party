@@ -10,7 +10,7 @@ import os
 import time
 from pathlib import Path
 
-from . import audio, lyrics
+from . import audio, install_manifest, lyrics
 from .config import Config
 
 log = logging.getLogger("pipeline")
@@ -42,7 +42,9 @@ def device_info(device: str) -> dict:
 
 
 class Models:
-    """Lazily loaded, then kept: Demucs separator, WhisperX ASR model, align models per language."""
+    """Lazily loaded, then kept: Demucs separator, WhisperX ASR model, align models per language. Model files a load
+    downloads for the first time are recorded in the install manifest, so the uninstaller can remove them (and only
+    them: caches another app already had are left alone)."""
 
     def __init__(self, device: str = "cuda", whisper_model: str = ""):
         self.device = device
@@ -57,7 +59,8 @@ class Models:
         if self._separator is None:
             from demucs.api import Separator
             t = time.perf_counter()
-            self._separator = Separator(model=DEMUCS_MODEL, device=self.device, progress=False)
+            with install_manifest.track_model_downloads():
+                self._separator = Separator(model=DEMUCS_MODEL, device=self.device, progress=False)
             log.info("demucs %s loaded in %.1fs", DEMUCS_MODEL, time.perf_counter() - t)
         self._separator.update_parameter(callback=callback)
         return self._separator
@@ -66,7 +69,8 @@ class Models:
         if self._asr is None:
             import whisperx
             t = time.perf_counter()
-            self._asr = whisperx.load_model(self.whisper_model, self.device, compute_type=self.compute_type)
+            with install_manifest.track_model_downloads():
+                self._asr = whisperx.load_model(self.whisper_model, self.device, compute_type=self.compute_type)
             log.info("whisper %s (%s) loaded in %.1fs", self.whisper_model, self.compute_type, time.perf_counter() - t)
         return self._asr
 
@@ -74,7 +78,8 @@ class Models:
         if language not in self._align:
             import whisperx
             t = time.perf_counter()
-            self._align[language] = whisperx.load_align_model(language_code=language, device=self.device)
+            with install_manifest.track_model_downloads():
+                self._align[language] = whisperx.load_align_model(language_code=language, device=self.device)
             log.info("align model %s loaded in %.1fs", language, time.perf_counter() - t)
         return self._align[language]
 
