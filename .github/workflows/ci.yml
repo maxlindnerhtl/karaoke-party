@@ -22,8 +22,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           version: "0.13.5"
       # the ML stack (torch, demucs, whisperx; several GB) isn't needed by the tests
@@ -47,14 +47,14 @@ jobs:
       run:
         working-directory: tvapp
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
       - run: ./gradlew assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: tvapp-debug
@@ -72,15 +72,19 @@ jobs:
       matrix:
         api: [24, 30, 34]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
       - name: Build the app and test APKs
         working-directory: tvapp
         run: ./gradlew assembleDebug assembleDebugAndroidTest
+      - name: Free disk space (the API 34 TV image alone wants a 7 GB data partition)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY"
+          df -h /
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -93,12 +97,13 @@ jobs:
           target: android-tv
           arch: x86
           disable-animations: true
+          disk-size: 4096M
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
             python3 scripts/tv_setup.py --serial emulator-5554 --apk tvapp/app/build/outputs/apk/debug/app-debug.apk --grant-only
             cd tvapp && ./gradlew connectedDebugAndroidTest
             adb -s emulator-5554 exec-out screencap -p > tvapp/app/build/emulator-api${{ matrix.api }}.png || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: emulator-api${{ matrix.api }}
