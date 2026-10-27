@@ -72,6 +72,11 @@ jobs:
       matrix:
         api: [24, 30, 34]
     steps:
+      # first, before setup-java puts the JDK into the tool cache (which stays)
+      - name: Free disk space (the API 34 TV image alone wants a 7 GB data partition)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/.ghcup
+          df -h /
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
         with:
@@ -81,10 +86,6 @@ jobs:
       - name: Build the app and test APKs
         working-directory: tvapp
         run: ./gradlew assembleDebug assembleDebugAndroidTest
-      - name: Free disk space (the API 34 TV image alone wants a 7 GB data partition)
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY"
-          df -h /
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
