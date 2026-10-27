@@ -128,6 +128,15 @@ def test_stats_and_show_on_tv(cfg):
             assert msg["type"] == "show_stats" and msg["singers"][0]["name"] == "Ann"
 
 
+def next_queue(ws) -> list[dict]:
+    """The next queue_changed event's upcoming entries; other events (e.g. job_progress from the server's poll
+    loop) can arrive in between."""
+    while True:
+        msg = ws.receive_json()
+        if msg["type"] == "queue_changed":
+            return msg["upcoming"]
+
+
 def test_two_phones_see_each_others_entries_live(cfg):
     with TestClient(create_app(cfg, watch_library=False)) as c:
         ids = song_ids(c)
@@ -135,10 +144,10 @@ def test_two_phones_see_each_others_entries_live(cfg):
         with c.websocket_connect("/ws") as phone_a, c.websocket_connect("/ws") as phone_b:
             phone_a.receive_json(), phone_b.receive_json()
             c.post("/api/queue", json={"song_id": ids["Song"]}, headers={"X-Guest-Id": a})
-            assert [e["title"] for e in phone_b.receive_json()["upcoming"]] == ["Song"]
-            assert [e["title"] for e in phone_a.receive_json()["upcoming"]] == ["Song"]
+            assert [e["title"] for e in next_queue(phone_b)] == ["Song"]
+            assert [e["title"] for e in next_queue(phone_a)] == ["Song"]
             c.post("/api/queue", json={"song_id": ids["Ballad"]}, headers={"X-Guest-Id": b})
-            assert [e["singers"][0]["name"] for e in phone_a.receive_json()["upcoming"]] == ["Ann", "Ben"]
+            assert [e["singers"][0]["name"] for e in next_queue(phone_a)] == ["Ann", "Ben"]
 
 
 def test_pages_host_check_and_guests(cfg):
