@@ -539,7 +539,7 @@ wheels = [
 
 [[package]]
 name = "karaoke-party"
-version = "0.1.1"
+version = "0.1.2"
 source = { virtual = "." }
 default-groups = ["dev", "ml"]
 dependencies = [

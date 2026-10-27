@@ -200,6 +200,7 @@ Start-Sleep -Seconds 2
 
 # --- 2. admin: task, rules, network profile ---------------------------------------------------------------------------
 
+$adminFailed = $false   # the elevated step's log in %TEMP% is kept only then
 if ($KeepNetworkProfile) { $restore = '' }
 if ($restore -and -not (Confirm-Step "Switch '$($profileChange.name)' back to $($profileChange.previous)? (the installer changed it to Private)")) { $restore = '' }
 if ($task -or $rules -or $restore) {
@@ -214,7 +215,7 @@ if ($task -or $rules -or $restore) {
         try {
             $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList $argList
             if (Test-Path $AdminLog) { Get-Content $AdminLog | Where-Object { $_ -match '^\s{4}|ERROR' } | ForEach-Object { Write-Host $_ } }
-            if ($p.ExitCode -ne 0) { Warn "the elevated step failed (exit code $($p.ExitCode)); see $AdminLog" }
+            if ($p.ExitCode -ne 0) { $adminFailed = $true; Warn "the elevated step failed (exit code $($p.ExitCode)); see $AdminLog" }
         } catch {
             # UAC declined or timed out: carry on with the parts that need no admin rights
             Warn 'admin step skipped (the UAC prompt was declined): the task and firewall rules are still there.'
@@ -263,6 +264,11 @@ elseif ($tools) {
             Ok "removed uv (and its cache) from $dir"
         }
     } else { Warn 'tools kept' }
+}
+
+if (Test-Path $AdminLog) {
+    if ($adminFailed) { Warn "The admin step's log is kept for troubleshooting: $AdminLog (delete it when done)" }
+    else { Remove-Item $AdminLog -Force -ErrorAction SilentlyContinue }
 }
 
 Write-Host ''
