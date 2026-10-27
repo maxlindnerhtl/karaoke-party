@@ -1,0 +1,56 @@
+[project]
+name = "karaoke-party"
+version = "0.1.0"
+description = "LAN karaoke for house parties: vocal removal and synced lyrics on your PC, a lyrics player on Android TV"
+license = "GPL-3.0-or-later"
+requires-python = "==3.11.*"
+dependencies = [
+    "fastapi==0.162.0",
+    "httpx==0.28.1",
+    "mutagen==1.48.1",
+    "numpy==2.4.6",
+    "pillow==13.0.0",
+    "psutil==7.2.2",
+    "pystray==0.19.5; sys_platform == 'win32'",
+    "python-dotenv==1.2.4",
+    "rapidfuzz==3.14.6",
+    "scipy==1.17.1",
+    "segno==1.6.6",
+    "uvicorn[standard]==0.54.0",
+    "watchdog==6.0.0",
+]
+
+[dependency-groups]
+# The processing stack (several GB). Installed by default; CI and quick checks skip it with --no-group ml.
+ml = [
+    "demucs==4.1.0",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    "whisperx==3.8.6",
+]
+dev = [
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+package = false
+default-groups = ["ml", "dev"]
+environments = [
+    "sys_platform == 'win32'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+# torch: CUDA 12.8 builds (the first that support RTX 50-series GPUs; they also run on the CPU). On Windows they
+# come from the PyTorch index; PyPI's Linux wheels of the same version already are CUDA 12.8 builds.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+torchaudio = { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+torchvision = { index = "pytorch-cu128", marker = "sys_platform == 'win32'" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

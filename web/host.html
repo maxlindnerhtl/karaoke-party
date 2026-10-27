@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121118">
+<title>Karaoke Host</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="loginView" class="wrap join" hidden>
+  <h1>Host</h1>
+  <p>Enter the host PIN.</p>
+  <form id="loginForm">
+    <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN" required>
+    <button class="btn" type="submit">Unlock</button>
+    <div id="loginErr" class="err" role="alert"></div>
+  </form>
+</div>
+
+<div id="hostView" class="wrap wide" hidden>
+  <header class="top">
+    <span id="conn" class="dot" title="Connected"></span>
+    <h1>Karaoke Host</h1>
+    <button id="statsBtn" class="btn small" type="button">Show stats on TV</button>
+    <button id="logout" class="btn small ghost" type="button">Lock</button>
+  </header>
+
+  <div class="host-grid">
+    <div>
+      <div class="section-title">Now playing</div>
+      <div id="playing"></div>
+      <div class="section-title">Queue <span class="count" id="queueCount"></span></div>
+      <div id="queue"></div>
+    </div>
+
+    <div>
+      <div class="section-title">Processing</div>
+      <div id="cpuWarn" class="hint warn-note" hidden>No CUDA GPU found: songs are processed on the CPU, which takes
+        several minutes per song. Queue early, or use the nightly batch.</div>
+      <div class="card"><div id="jobs" class="jobs"></div></div>
+
+      <div class="section-title">Wishlist</div>
+      <div class="card"><div id="wishlist" class="jobs"></div></div>
+
+      <div class="section-title">Settings</div>
+      <form id="settingsForm" class="card settings">
+        <label>Default backing vocals
+          <select id="setVocal">
+            <option value="0">0 % (no vocals)</option><option value="5">5 %</option>
+            <option value="10">10 %</option><option value="15">15 %</option>
+          </select>
+        </label>
+        <label>Nightly batch (processes starred and most played songs)
+          <div class="row">
+            <input id="setNightly" type="time" style="flex:1">
+            <label class="row" style="color:var(--text)"><input id="setNightlyOff" type="checkbox"> Off</label>
+          </div>
+        </label>
+        <label>Global lyric offset (ms, + shows lyrics later)
+          <input id="setOffset" type="number" min="-10000" max="10000" step="50">
+        </label>
+        <div class="row"><button class="btn" type="submit">Save settings</button><span id="settingsMsg" class="hint"></span></div>
+      </form>
+
+      <div class="section-title">Library (star songs for the nightly batch)</div>
+      <div class="card">
+        <div class="searchbar">
+          <input id="libQ" type="search" placeholder="Search the library" aria-label="Search the library">
+        </div>
+        <div class="row" style="margin-bottom:6px">
+          <label class="row"><input id="libStarred" type="checkbox"> Starred only</label>
+          <span style="flex:1"></span>
+          <button id="rescan" class="btn small ghost" type="button">Rescan folder</button>
+        </div>
+        <div id="library" class="jobs"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/host.js"></script>
+</body>
+</html>

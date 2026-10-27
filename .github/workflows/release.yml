@@ -1,0 +1,60 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching versionName in tvapp/app/build.gradle) to build a signed APK and publish it as a
+# GitHub Release. Signing secrets: KARAOKE_KEYSTORE_BASE64, KARAOKE_KEYSTORE_PASSWORD, KARAOKE_KEY_ALIAS,
+# KARAOKE_KEY_PASSWORD.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.5"
+      - name: Server tests
+        run: uv sync --frozen --no-group ml && uv run --no-sync pytest -q
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Check the tag matches versionName
+        run: |
+          version=$(sed -n "s/^ *versionName '\(.*\)'/\1/p" tvapp/app/build.gradle)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME doesn't match versionName $version in tvapp/app/build.gradle"; exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build the signed release APK
+        working-directory: tvapp
+        env:
+          KARAOKE_KEYSTORE_BASE64: ${{ secrets.KARAOKE_KEYSTORE_BASE64 }}
+          KARAOKE_KEYSTORE_PASSWORD: ${{ secrets.KARAOKE_KEYSTORE_PASSWORD }}
+          KARAOKE_KEY_ALIAS: ${{ secrets.KARAOKE_KEY_ALIAS }}
+          KARAOKE_KEY_PASSWORD: ${{ secrets.KARAOKE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KARAOKE_KEYSTORE_BASE64" ]; then echo "signing secrets are missing"; exit 1; fi
+          echo "$KARAOKE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          export KARAOKE_KEYSTORE="$RUNNER_TEMP/release.jks"
+          ./gradlew testDebugUnitTest assembleRelease
+          rm -f "$RUNNER_TEMP/release.jks"
+      - name: Verify the signature
+        run: |
+          apk=tvapp/app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner verify --print-certs "$apk"
+          cp "$apk" "karaoke-party-$VERSION.apk"
+          sha256sum "karaoke-party-$VERSION.apk" > "karaoke-party-$VERSION.apk.sha256"
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "karaoke-party-$VERSION.apk" "karaoke-party-$VERSION.apk.sha256" \
+            --title "Karaoke Party $VERSION" \
+            --notes "TV app for Android TV / Google TV 7.0+. Install it with \`python scripts/tv_setup.py --tv <TV IP> --apk karaoke-party-$VERSION.apk\` (see the README, \"Setup: TV\"). The PC side is installed from the repo (\`scripts/install.ps1\` or \`scripts/install.sh\`)."

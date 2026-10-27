@@ -1,0 +1,17 @@
+.env
+/data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+/tvapp/**/build/
+/tvapp/.gradle/
+/tvapp/.kotlin/
+/tvapp/local.properties
+*.apk
+*.aab
+# release signing: never commit keystores or their passwords
+*.jks
+*.keystore
+/tvapp/keystore.properties
+/demo/

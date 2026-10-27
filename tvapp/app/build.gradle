@@ -1,0 +1,68 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// Release signing: from environment variables (CI) or tvapp/keystore.properties (local; gitignored). Without
+// either, release builds are unsigned and debug builds use the usual debug key.
+def signingProps = new Properties()
+def signingFile = rootProject.file('keystore.properties')
+if (signingFile.exists()) signingFile.withInputStream { signingProps.load(it) }
+def signingValue = { String key -> System.getenv(key) ?: signingProps.getProperty(key) }
+
+android {
+    namespace 'com.karaoke.tv'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.github.maxlindnerhtl.karaokeparty'
+        minSdk 24          // Android 7.0, the oldest Android TV still in common use
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    signingConfigs {
+        release {
+            if (signingValue('KARAOKE_KEYSTORE')) {
+                storeFile file(signingValue('KARAOKE_KEYSTORE'))
+                storePassword signingValue('KARAOKE_KEYSTORE_PASSWORD')
+                keyAlias signingValue('KARAOKE_KEY_ALIAS')
+                keyPassword signingValue('KARAOKE_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (signingValue('KARAOKE_KEYSTORE')) signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    lint {
+        abortOnError true
+        // a sideloaded TV app: no Play Store requirements; the SYSTEM_ALERT_WINDOW grant is optional and via adb
+        disable 'ExpiredTargetSdkVersion', 'OldTargetApi', 'GradleDependency', 'NewerVersionAvailable',
+                'AndroidGradlePluginVersion'
+    }
+}
+
+dependencies {
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'   // the real org.json; android.jar only has stubs
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+}

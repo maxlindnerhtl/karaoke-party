@@ -1,0 +1,280 @@
+# Karaoke Party: Spec
+
+The design and the decisions behind it. If a decision changes, update this file (section 11, Decision log) in the
+same commit.
+
+## 1. Goal
+
+A LAN karaoke system for house parties:
+
+- Guests scan a QR code on the TV, enter a name, search any song on their phone and queue it.
+- Songs from the host's local music library are processed on the PC: vocals removed (Demucs), synced lyrics fetched
+  (LRCLIB) or generated (WhisperX), with word-level timing.
+- Songs not in the library fall back to an existing YouTube karaoke video, played in the official YouTube app on the TV.
+- The TV shows the QR code, the queue, and fullscreen synced lyrics while the instrumental plays.
+
+## 2. Environment
+
+- **PC:** Windows 10/11 or Linux (x86-64), Python 3.11 via `uv`. An NVIDIA GPU with a CUDA 12.8 capable driver is the
+  fast path (about 1 minute per song; RTX 50-series needs the cu128 builds, which is why they're used). Without CUDA
+  everything runs on the CPU, several minutes per song, with a warning.
+- **TV:** Android TV / Google TV 7.0 (API 24) or newer, on the same network as the PC. Network or USB debugging for
+  the one-time setup over adb.
+- LAN only, never exposed to the internet.
+- **Music library:** `MUSIC_PATH` in `.env`. Read-only: never modify, move or write into it. Users bring their own,
+  legally obtained, DRM-free files; the repo contains no music, lyrics or video.
+
+## 3. Non-goals / hard rules
+
+- Never download audio or video from YouTube or any other site. YouTube entries are only ever played in the YouTube
+  app on the TV.
+- No microphone input, pitch scoring or live vocal mixing.
+- No cloud services besides LRCLIB and the YouTube Data API (optional).
+- Nothing that needs admin rights runs without asking (firewall rules, scheduled tasks, linger, system packages).
+
+## 4. Repo layout
+
+```
+/server   FastAPI app, processing worker, pipeline, SQLite access
+/web      phone page + host page (static, no build step: vanilla JS + CSS)
+/tvapp    Android TV app (Gradle project)
+/scripts  install.ps1 (Windows), install.sh (Linux), tv_setup.py (adb), demo_data.py
+/docs     screenshots
+/data     runtime data (gitignored): db, stems, renders, lyrics, logs
+.env      config + secrets (gitignored): MUSIC_PATH, HOST_PIN, YT_API_KEY, ...; .env.example is committed
+```
+
+## 5. Architecture and key decisions
+
+1. **Single source of truth:** the server owns library, queue and playback state. TV and phones are clients.
+2. **Real-time sync:** one WebSocket channel `/ws` broadcasts state events (queue changed, now playing, job progress,
+   reactions) to TV and phones. REST for actions.
+3. **One stream per song on the TV:** all mixing (instrumental + backing-vocal level), key shift and loudness
+   normalization happen on the PC with ffmpeg. The TV never mixes audio.
+4. **Separate worker process:** processing runs from a job table in SQLite, one GPU job at a time, ordered by queue
+   position. The API stays responsive. The worker keeps the Demucs and WhisperX models loaded between jobs.
+5. **Python env via `uv`**, Python 3.11, exact pins, `uv.lock` committed. The ML stack is the `ml` dependency group
+   (installed by default; CI skips it).
+6. **Persistence:** SQLite (`data/karaoke.db`). The queue survives server restarts.
+7. **Discovery:** the server answers UDP broadcast discovery on a fixed port; the TV app finds it automatically, with
+   manual IP entry as fallback. The QR code points to `http://<PC LAN IP>:<port>/`.
+8. **TV UI:** classic Android Views (no Jetpack Compose) for performance on old hardware. Lyrics are drawn in one
+   custom View on Canvas, driven by the ExoPlayer position every frame.
+
+## 6. Server (Python, FastAPI)
+
+### Library
+
+- Index `MUSIC_PATH` recursively (mp3, m4a, flac, ogg, wav). Tags via mutagen; fallback "Artist - Title" from the
+  file name. Watch for new, changed and deleted files.
+- Song id = fast content hash (file size + first and last MB).
+- Fuzzy search (rapidfuzz) on title + artist. Play counts for "most played".
+
+### Processing pipeline (per library song, lazy)
+
+Triggered when a song is queued and not cached, or by the nightly batch.
+
+1. **Separation:** Demucs `htdemucs_ft` → `vocals.wav` and `no_vocals.wav` (sum of the other stems, float32) in
+   `data/stems/<song_id>/`.
+2. **Lyrics:**
+   - a. LRCLIB `GET /api/get` with artist, title, album, duration (descriptive User-Agent). Any non-200 (it can answer
+     503 on a miss) falls back to `/api/search`, picking the best fuzzy title/artist match with duration within ±3 s.
+   - b. Synced lyrics found: WhisperX alignment on the vocal stem with the LRC lines as segments → word-level
+     timestamps. Source = `lrclib`.
+   - c. None (or only plain lyrics): WhisperX transcribe + align the vocal stem, split into display lines at pauses or
+     a max word count. Source = `auto` (shown with a small badge).
+   - d. Language: detected from where the singing starts (the first LRC line, else the vocal onset), not from the
+     first 30 s, which are often an intro. A language without an align model falls back to English.
+   - e. Stored as JSON: `{source, language, lines: [{start, end, text, words: [{start, end, text}]}]}`.
+3. **Render:** ffmpeg mixes instrumental + vocals × level, applies the key shift with the rubberband filter (pitch
+   ratio 2^(n/12), `formant=preserved:pitchq=quality:channels=together:transients=mixed`), applies the loudness gain
+   for that song and key, then a true-peak limiter, and encodes AAC 192k `.m4a`.
+   - Loudness: measured once per (song, key) (EBU R128 on the instrumental with that key's shift) and cached as a gain
+     to −16 LUFS (`loudness` table).
+   - Peaks: 4× oversampled `alimiter` (attack 5 ms, release 100 ms) at −1.5 dB. Each encoded render is measured; above
+     −1 dBTP (AAC overshoot) it is rendered again with a lower ceiling (at most 3 attempts).
+   - Cache key = (song_id, key_shift, vocal_level). Vocal levels 0/5/10/15 % (default 0 %). The queued level is
+     rendered first (entry ready), the other levels for that key follow in the background.
+   - Requires an ffmpeg with librubberband, checked at startup.
+4. **Job states:** queued → separating → lyrics → rendering → ready | failed (with error text). Progress goes out over
+   the WebSocket.
+
+**Processing device:** `DEVICE=auto` uses CUDA when torch sees a GPU, else the CPU (Whisper int8, `medium` by default,
+`WHISPER_MODEL` overrides). The worker stores the device; the host page warns when it is the CPU.
+
+**ffmpeg:** `FFMPEG_PATH`, else the ffmpeg on PATH. Demucs and WhisperX only get decoded arrays, never files, so they
+never shell out to another ffmpeg. No ffprobe needed (durations and tags come from mutagen).
+
+**Nightly batch** (configurable time, off by default): process starred and most-played songs that aren't cached yet.
+
+### YouTube search
+
+- YouTube Data API v3, key from `.env` (`YT_API_KEY`, optional).
+- `search.list` costs 100 of the default 10,000 daily quota units (~100 searches/day). So: search only on explicit
+  submit, cache results per normalized query for 7 days, at most 95 uncached searches per quota day (Pacific time),
+  and block until the next quota day after `quotaExceeded`. Durations via `videos.list` (1 unit).
+- Query `<user query> karaoke`. Ranking: titles with karaoke/instrumental and ≤ 8 min first, by views; live streams
+  dropped. Top 5 kept: the first is the pick, the rest are "Not this one?".
+
+### Queue
+
+- **Entry fields:** id, source (`library`|`youtube`), song_id or video id, title, artist, singers (1 guest, or 2 for a
+  duet), key_shift (−3..+3, library only), vocal_level, status (`waiting`/`preparing`/`ready`/`playing`/`done`/
+  `skipped`/`failed`), added_by, created_at.
+- **Ordering:** round-robin across guests in the order they first queued. A new entry's turn is (its round = the
+  guest's number of upcoming entries, the guest's rank) and it goes after the last upcoming entry whose turn comes
+  before it. Positions are stored, so a host reorder persists.
+- **Unready head:** if the head entry isn't ready when the current song ends, play the first ready entry and keep the
+  head on top.
+- **Permissions:** guests remove only their own entries. The host can reorder, skip and remove anything.
+- **Wishlist:** searches with no library hit where the user rejects all YouTube results, or where YouTube returns
+  nothing.
+
+### API
+
+- Guests identify with `X-Guest-Id` (from `POST /api/guest`). Host endpoints need the PIN via `X-Host-Pin` or the
+  `host_pin` cookie (`POST /api/host/login {pin}`).
+- Library: `GET /api/library?q=&sort=title|artist|most_played|recent`; `GET /api/search?q=&youtube=1&force=1`
+  (library hits + `good_match` = best WRatio ≥ 90; YouTube only with `youtube=1` and no good match, or `force=1`);
+  host: `POST /api/library/{song_id}/star {starred}`, `POST /api/library/rescan`.
+- Guests: `POST /api/guest {name}` → `{id, name}`; `GET /api/guests`.
+- Queue: `GET /api/queue` → `{playing, playback, upcoming[]}`; `POST /api/queue {song_id | video_id+title+duration,
+  singers?, key_shift?, vocal_level?}`; `DELETE /api/queue/{id}`; host: `POST /api/queue/{id}/move {index}`,
+  `/skip`, `/retry`.
+- Playback: `GET /api/now`; `POST /api/player/next`; `POST /api/player/{started|position|paused|ended|skip}
+  {entry_id, position}` (reported by the TV).
+- Media: `GET|HEAD /media/{song_id}_k{±n}_v{level}.m4a` (range requests).
+- Lyrics: `GET /api/lyrics/{song_id}` (+ `offset_ms`, `global_offset_ms`); `POST /api/offset/{song_id} {offset_ms}`.
+- Wishlist: `POST /api/wishlist {query}`; host: `GET /api/wishlist`, `DELETE /api/wishlist/{id}`.
+- `POST /api/reaction {emoji}` (1 per second per guest; 👏 🔥 ❤️ 😂 🎤), `GET /api/stats`.
+- Host: `POST /api/host/login|logout`, `GET /api/host/check`, `GET /api/settings`, `POST /api/host/settings
+  {default_vocal_level?, nightly_batch_time?, global_offset_ms?}`, `POST /api/host/show_stats`.
+- `GET /api/jobs` → `{jobs, device}` (processing status and device).
+- `WS /ws` events: `hello`, `queue_changed`, `job_progress`, `now_playing`, `position` (≤ 1/s), `skip`,
+  `offset_changed`, `library_changed`, `reaction`, `wishlist_changed`, `settings_changed`, `show_stats`.
+- TV: `GET /qr.png`; UDP discovery on `DISCOVERY_PORT` (8766): `KARAOKE_DISCOVER` is answered with
+  `{"service": "karaoke", "port": <http port>}`; `GET /api/server_info` → `{mac, ip, port}` (Wake-on-LAN target:
+  `PC_MAC`, else the adapter with the LAN IP).
+- Pages: `/` phone, `/host` host, `/debug` debug; static files under `/static`.
+
+### OS integration
+
+- **Windows:** tray app (pystray: host page, music folder, status, restart, quit) started at logon by a Task Scheduler
+  task; `scripts/install.ps1 [-SkipAdmin | -AdminOnly | -Uninstall]` installs uv, Python, the env and (if needed)
+  an ffmpeg with rubberband, then asks before the admin steps: Private-profile firewall rules for the two ports and
+  the autostart task. Under `pythonw` there is no console: stdout/stderr go to devnull and uvicorn logs through our
+  handlers.
+- **Linux:** `scripts/install.sh` installs uv, Python and the env, checks ffmpeg, and installs a systemd *user*
+  service running `python -m server`. Linger and firewall rules (ufw/firewalld) are printed, or run after asking.
+- Rotating logs in `data/logs`.
+- One server at a time (port check); one worker claims jobs (`data/worker.lock`). The worker watches its parent
+  (Windows process handle, Linux pidfd); if the server dies it finishes the current job and exits.
+
+## 7. Phone page (`/web`, served at `/`)
+
+- Mobile-first, no login, no build step. On the first visit the guest enters a name (localStorage).
+- One search box: library results while typing; YouTube only on submit and only without a good library match
+  ("Not the right song? Search YouTube" forces it). Result cards with a source badge; "Not this one?" shows
+  alternatives. One tap queues.
+- Library song options: key shift (−3..+3) and duet (pick a guest who joined, or type a name).
+- Queue view with status badges; guests remove their own entries. Reaction buttons.
+
+## 8. Host page (`/host`, PIN-protected)
+
+- Reorder, skip, remove, retry failed. Wishlist and processing status (with the CPU warning). Stars for the nightly
+  batch. "Show stats on TV". Settings: default vocal level, nightly batch time, global lyric offset.
+
+## 9. TV app (`/tvapp`, Kotlin)
+
+- **Stack:** minSdk 24 (Android 7.0), compileSdk/targetSdk 35, Media3/ExoPlayer, OkHttp WebSocket, classic Views.
+  1080p UI, large high-contrast fonts, fully D-pad controllable. All colors, sizes and timings in `Theme.kt`.
+- applicationId `io.github.maxlindnerhtl.karaokeparty` (Kotlin namespace `com.karaoke.tv`).
+
+### Screens
+
+- **Lobby:** QR code + URL, queue cards, "Up next" banner with a 10 s auto-start countdown (OK starts now, Back waits).
+- **Player:** current line (110 px, wraps to 2 rows, shrinks to 64 px at most) with word-level highlighting, previous
+  line faded, next line below; countdown dots before vocals and after breaks > 8 s; singer chip; progress bar; one
+  slim "Next" line. Duets alternate lines in two colors with the singer names.
+- **Stats:** most sung songs and top singers (from the host page; after the current song).
+
+### Remote controls
+
+| Button | Action |
+|---|---|
+| OK | Play/pause |
+| Left/Right | Lyric offset ±100 ms (saved per song on the server) |
+| Up/Down | Backing-vocal level 0/5/10/15 % (pre-rendered stream, same position) |
+| Back | Pause and show the lobby (never a skip) |
+| Long-press OK or Menu | Skip (with confirmation) |
+
+### YouTube entries
+
+- Opened via a VIEW intent in the first installed YouTube app (`com.google.android.youtube.tv`, Fire TV's, the phone
+  app), else any app that opens youtube.com links. Each has a `<queries>` entry (Android 11+ package visibility).
+- A foreground service (`mediaPlayback`) watches that app's media session via
+  `MediaSessionManager.getActiveSessions()`, which needs our `NotificationListenerService` to be enabled. The grant is
+  done once over adb (`scripts/tv_setup.py`): Android 8+ `cmd notification allow_listener <component>`; Android 7 has
+  no such command, so the component is appended to `settings secure enabled_notification_listeners` (keeping the
+  other entries). The lobby shows the right command when the grant is missing.
+- The requested video counts as seen by the best signal the session offers: media id → title (+ duration within
+  ±15 s) → duration alone (no title) → play time alone (no metadata). Pre-roll ads don't match.
+- After that it has ended when the session is STOPPED/NONE or gone, PAUSED at ≥ duration − 2 s, or switches to another
+  item after our video got within 10 s of its end (furthest position, since YouTube can reset the position before a
+  post-roll ad). Each condition must hold 1.5 s.
+- Fallback: a timer of video duration + 60 s. Back from YouTube also continues (`ended` if the video was seen, else
+  `skip`).
+- The service reports the end itself and brings the app back. Android 10+ only allows that from the background with
+  an exemption: the bound notification listener, or "display over other apps" (`appops set <pkg>
+  SYSTEM_ALERT_WINDOW allow`, also done by `tv_setup.py`). Without either, the queue still continues and the lobby
+  is there after Back/Home.
+
+### Other behavior
+
+- Floating reactions overlay (right 20 %, 3.5 s, at most 15).
+- Auto-discovery and reconnect with backoff (capped at 10 s); "Server offline" state with manual IP entry and a
+  Wake-on-LAN button (the MAC from `/api/server_info` is stored; WoL needs Ethernet + WoL enabled on the PC).
+- End reports that can't reach the server are kept (also across restarts) and sent on reconnect. A stalled stream
+  while the server is down continues at the same position.
+
+## 10. Testing
+
+- Server: `uv run pytest` (no GPU, network or ML packages needed), in CI on Ubuntu and Windows.
+- TV app: unit tests (`testDebugUnitTest`), lint, and instrumented tests on Android TV emulators (API 24, 30, 34) in
+  CI, after `scripts/tv_setup.py --grant-only` grants the listener. YouTube isn't on emulator images, so the
+  instrumented test publishes a fake media session.
+- Real devices: install with `scripts/tv_setup.py`, check the launcher tile, a library song and a YouTube song.
+
+## 11. Decision log
+
+Decisions from development, kept for the reasoning behind them.
+
+- Demucs and WhisperX share one venv (torch 2.8.0 cu128, demucs 4.1.0, whisperx 3.8.6); no conflicts.
+- ffmpeg is configurable and checked for rubberband at startup: common builds (and some on PATH) lack it. Every input
+  is decoded by that ffmpeg first, so Demucs/WhisperX never call another one.
+- LRCLIB `/api/get` sometimes answers 503 instead of 404; any non-200 falls back to `/api/search`.
+- WhisperX auto transcripts have segments up to ~15 s; they are split into display lines.
+- Backing-vocal levels 0/5/10/15 % (20 % was too present in listening tests); rubberband "HQ" settings as above.
+- Models stay loaded in the worker (warm: Whisper load ~12 s, align model ~1 s). The queued level is rendered first.
+- Loudness gain per (song, key): rubberband lowers loudness by 1–2 dB and raises the true peak by 2–3 dB, so one gain
+  per song left shifted keys quiet. Target −16 LUFS; a true-peak limiter on every render (a −1.0 dB ceiling wasn't
+  enough because of AAC overshoot, hence −1.5 dB plus re-render).
+- Removing/skipping an entry also drops its orphaned background render jobs.
+- YouTube pre-roll ads (10–30 s) make a "duration + 10 s" timer return too early, so the app reads YouTube's media
+  session (YouTube TV 5.30: title and duration but no media id; ads have an empty title or the ad's duration; after the
+  video the session goes to NONE and disappears within ~2 s; `ended` was reported ~1.8 s after the video ended).
+  Metadata differs between YouTube versions, hence the graded matching in section 9.
+- After a cold start YouTube can show "Who's watching?"; someone picks a profile once.
+- Party-test fixes: undelivered end reports are kept and resent; a stalled stream while the server is down waits
+  instead of skipping; a crashed server's worker exits after its job (Windows doesn't end children with the parent)
+  and only the lock holder claims jobs; language detection starts at the singing; the TV's reconnect backoff is
+  capped at 10 s.
+- The tray's Restart restarts API, discovery and worker inside the tray process.
+- TV design: the web pages' dark palette (BG `#121118`, accent `#9d6bff`, sung words `#b48cff`, duet second singer
+  `#f0b04a`), Roboto, rounded cards and pill badges; the player footer is one slim "Next" line.
+- TV icon and banner: an original mark (a microphone and three lyric lines, the first half "sung"), defined once in
+  `tvapp/art/build.py`, which writes the SVG sources, the adaptive icon (Android 8+), legacy PNGs for all densities
+  and the 320×180 banner.
+- **2026-10-27, public release:** Windows + Linux, CUDA with CPU fallback, optional `FFMPEG_PATH`, targetSdk 35 with
+  `<queries>`, graded YouTube matching, adb-only setup script, signed release APKs via GitHub Releases, CI with
+  emulator tests. License GPL-3.0-or-later (mutagen is GPL-2.0-or-later; ffmpeg/rubberband are not bundled).

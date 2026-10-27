@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karaoke debug</title>
+<style>
+  :root { color-scheme: light dark; --muted: #888; --line: #8884; --hi: #e0a400; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0 auto; max-width: 1100px; padding: 12px 16px; }
+  h1 { font-size: 18px; margin: 0 0 8px; } h2 { font-size: 15px; margin: 16px 0 6px; }
+  section { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  table { border-collapse: collapse; width: 100%; } td, th { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+  .muted { color: var(--muted); } .badge { font-size: 11px; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); }
+  #log { height: 160px; overflow: auto; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  #lyrics { font-size: 20px; min-height: 60px; } #lyrics .w.on { color: var(--hi); } #lyrics .next { color: var(--muted); font-size: 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  button { cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>Karaoke debug page <span class="muted">(phase 1)</span></h1>
+
+<section class="row">
+  <label>Guest name <input id="guestName" size="12"></label><button id="joinBtn">Join</button>
+  <span id="guestInfo" class="muted"></span>
+  <span style="flex:1"></span>
+  <label>Host PIN <input id="pin" type="password" size="6"></label><button id="pinBtn">Use PIN</button>
+  <span id="pinInfo" class="muted"></span>
+</section>
+
+<div class="grid">
+<section>
+  <h2>Library</h2>
+  <div class="row"><input id="q" placeholder="search…" style="flex:1">
+    <label>key <select id="key"></select></label>
+    <label>vocals <select id="vox"><option>0</option><option>5</option><option>10</option><option>15</option></select>%</label>
+  </div>
+  <table id="lib"></table>
+  <h2>Add a YouTube entry (no search until phase 2)</h2>
+  <div class="row"><input id="ytId" placeholder="video id" size="12"><input id="ytTitle" placeholder="title" style="flex:1">
+    <input id="ytDur" placeholder="sec" size="4"><button id="ytBtn">Queue</button></div>
+</section>
+
+<section>
+  <h2>Queue</h2>
+  <div id="playing"></div>
+  <table id="queue"></table>
+  <h2>Player (acts as the TV)</h2>
+  <div class="row"><button id="nextBtn">Play next</button><button id="endBtn">Ended</button><button id="skipBtn">Skip</button>
+    <span id="pbInfo" class="muted"></span></div>
+  <audio id="audio" controls style="width:100%;margin-top:6px"></audio>
+  <div id="lyrics"></div>
+</section>
+</div>
+
+<section><h2>Jobs</h2><table id="jobs"></table></section>
+<section><h2>WebSocket</h2><div id="log"></div></section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+let guestId = store.get("guestId"), current = null, lyricsDoc = null;
+for (let k = -3; k <= 3; k++) $("key").add(new Option((k > 0 ? "+" : "") + k, k, k === 0, k === 0));
+
+async function api(method, url, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (guestId) headers["X-Guest-Id"] = guestId;
+  if ($("pin").value) headers["X-Host-Pin"] = $("pin").value;
+  const r = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { log(`${method} ${url} -> ${r.status} ${data.detail || ""}`); throw new Error(data.detail); }
+  return data;
+}
+function log(s) { const el = $("log"); el.textContent += new Date().toLocaleTimeString() + " " + s + "\n"; el.scrollTop = el.scrollHeight; }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function fmt(sec) { sec = Math.round(sec || 0); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`; }
+
+function showGuest() { $("guestInfo").textContent = guestId ? `id ${guestId.slice(0, 8)}… (${store.get("guestName")})` : "not joined"; }
+$("joinBtn").onclick = async () => {
+  const g = await api("POST", "/api/guest", { name: $("guestName").value || "Guest" });
+  guestId = g.id; store.set("guestId", g.id); store.set("guestName", g.name); showGuest();
+};
+$("pin").value = store.get("pin") || "";
+$("pinBtn").onclick = async () => { await api("POST", "/api/host/login", { pin: $("pin").value }); store.set("pin", $("pin").value); $("pinInfo").textContent = "host"; };
+
+let searchTimer;
+$("q").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadLibrary, 150); };
+async function loadLibrary() {
+  const { songs } = await api("GET", "/api/library?q=" + encodeURIComponent($("q").value));
+  $("lib").innerHTML = songs.map((s) => `<tr><td>${esc(s.artist)} – <b>${esc(s.title)}</b>
+    <span class="muted">${fmt(s.duration)} · played ${s.play_count}</span>
+    ${s.lyrics_source ? `<span class="badge">${esc(s.lyrics_source)}</span>` : ""}</td>
+    <td><button data-id="${s.id}">Queue</button></td></tr>`).join("");
+  $("lib").querySelectorAll("button").forEach((b) => b.onclick = () =>
+    api("POST", "/api/queue", { song_id: b.dataset.id, key_shift: +$("key").value, vocal_level: +$("vox").value }));
+}
+$("ytBtn").onclick = () => api("POST", "/api/queue", { video_id: $("ytId").value, title: $("ytTitle").value, duration: +$("ytDur").value || 0 });
+
+function entryLine(e) {
+  const singers = e.singers.map((s) => esc(s.name)).join(" & ");
+  const job = e.job ? ` <span class="muted">${e.job.state} ${Math.round(e.job.progress * 100)}%</span>` : "";
+  const extra = e.source === "library" ? ` <span class="muted">key ${e.key_shift > 0 ? "+" : ""}${e.key_shift} · vox ${e.vocal_level}%</span>` : ` <span class="badge">YouTube ${esc(e.video_id)}</span>`;
+  return `${esc(e.artist)} – <b>${esc(e.title)}</b> <span class="muted">(${singers})</span>${extra}
+    <span class="badge">${e.status}</span>${job}${e.error ? `<div class="muted">${esc(e.error)}</div>` : ""}`;
+}
+function renderQueue(v) {
+  $("playing").innerHTML = v.playing ? `<p>▶ ${entryLine(v.playing)}</p>` : `<p class="muted">nothing playing</p>`;
+  $("queue").innerHTML = v.upcoming.map((e, i) => `<tr><td>${i + 1}</td><td>${entryLine(e)}</td><td style="white-space:nowrap">
+    <button data-a="up" data-id="${e.id}" data-i="${i - 1}">↑</button><button data-a="down" data-id="${e.id}" data-i="${i + 1}">↓</button>
+    <button data-a="del" data-id="${e.id}">✕</button><button data-a="skip" data-id="${e.id}">skip</button>
+    ${e.status === "failed" ? `<button data-a="retry" data-id="${e.id}">retry</button>` : ""}</td></tr>`).join("");
+  $("queue").querySelectorAll("button").forEach((b) => b.onclick = () => {
+    const id = b.dataset.id, a = b.dataset.a;
+    if (a === "up" || a === "down") api("POST", `/api/queue/${id}/move`, { index: +b.dataset.i });
+    else if (a === "del") api("DELETE", `/api/queue/${id}`);
+    else api("POST", `/api/queue/${id}/${a}`);
+  });
+}
+async function loadJobs() {
+  const { jobs } = await api("GET", "/api/jobs");
+  $("jobs").innerHTML = "<tr><th>job</th><th>song</th><th>kind</th><th>key/vox</th><th>state</th><th>progress</th><th>error</th></tr>" +
+    jobs.map((j) => `<tr><td>${j.id}</td><td>${j.song_id.slice(0, 8)}</td><td>${j.kind}</td><td>${j.key_shift}/${j.vocal_level}</td>
+      <td>${j.state}</td><td>${Math.round(j.progress * 100)}%</td><td class="muted">${esc(j.error)}</td></tr>`).join("");
+}
+
+// --- player (stands in for the TV) ---
+const audioEl = $("audio");
+async function play(entry) {
+  current = entry; lyricsDoc = null; $("lyrics").innerHTML = "";
+  if (!entry) { audioEl.removeAttribute("src"); $("pbInfo").textContent = "queue has nothing ready"; return; }
+  $("pbInfo").textContent = `#${entry.id} ${entry.title}`;
+  if (entry.source !== "library") { $("pbInfo").textContent += " (YouTube: would open the YouTube app)"; return; }
+  audioEl.src = entry.media_url; audioEl.play();
+  lyricsDoc = await api("GET", entry.lyrics_url).catch(() => null);
+}
+$("nextBtn").onclick = async () => { const r = await api("POST", "/api/player/next"); play(r.entry); };
+$("endBtn").onclick = async () => { if (current) await api("POST", "/api/player/ended", { entry_id: current.id }); audioEl.pause(); current = null; };
+$("skipBtn").onclick = async () => { if (current) await api("POST", "/api/player/skip", { entry_id: current.id }); audioEl.pause(); current = null; };
+audioEl.onplay = () => current && api("POST", "/api/player/started", { entry_id: current.id, position: audioEl.currentTime });
+audioEl.onended = () => $("endBtn").onclick();
+setInterval(() => { if (current && !audioEl.paused) api("POST", "/api/player/position", { entry_id: current.id, position: audioEl.currentTime }).catch(() => {}); }, 2000);
+
+function drawLyrics() {
+  requestAnimationFrame(drawLyrics);
+  if (!lyricsDoc || !lyricsDoc.lines.length) return;
+  const t = audioEl.currentTime - (lyricsDoc.offset_ms || 0) / 1000;
+  let i = lyricsDoc.lines.findIndex((l) => l.end >= t);
+  if (i < 0) i = lyricsDoc.lines.length - 1;
+  const line = lyricsDoc.lines[i], next = lyricsDoc.lines[i + 1];
+  const html = line.words.map((w) => `<span class="w${w.start <= t ? " on" : ""}">${esc(w.text)}</span>`).join(" ") +
+    `<div class="next">${next ? esc(next.text) : ""}</div><div class="muted" style="font-size:12px">${lyricsDoc.source} · ${lyricsDoc.language || ""}</div>`;
+  if ($("lyrics").innerHTML !== html) $("lyrics").innerHTML = html;
+}
+requestAnimationFrame(drawLyrics);
+
+// --- WebSocket with reconnect ---
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type !== "position") log(m.type + (m.job ? ` job ${m.job.id} ${m.job.state} ${Math.round(m.job.progress * 100)}%` : ""));
+    if (m.type === "hello" || m.type === "queue_changed") renderQueue(m);
+    if (m.type === "job_progress") loadJobs();
+    if (m.type === "library_changed") loadLibrary();
+  };
+  ws.onopen = () => log("ws connected");
+  ws.onclose = () => { log("ws closed, retrying"); setTimeout(connect, 2000); };
+}
+showGuest(); loadLibrary(); loadJobs(); connect();
+</script>
+</body>
+</html>

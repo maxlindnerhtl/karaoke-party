@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121118">
+<title>Karaoke</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="phone">
+
+<div id="joinView" class="wrap join" hidden>
+  <h1>🎤 Karaoke</h1>
+  <p>What should we call you on the TV?</p>
+  <form id="joinForm">
+    <input id="joinName" type="text" maxlength="40" autocomplete="nickname" placeholder="Your name" required>
+    <button class="btn" type="submit">Let's sing</button>
+    <div id="joinErr" class="err" role="alert"></div>
+  </form>
+</div>
+
+<div id="mainView" hidden>
+  <div class="wrap">
+    <header class="top">
+      <span id="conn" class="dot" title="Connected"></span>
+      <h1>🎤 Karaoke</h1>
+      <span class="who"><span id="me"></span><button id="rename" type="button">Change</button></span>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button id="tabSearch" role="tab" aria-selected="true" aria-controls="searchPanel">Search</button>
+      <button id="tabQueue" role="tab" aria-selected="false" aria-controls="queuePanel">Queue<span id="queueCount" class="count"></span></button>
+    </nav>
+
+    <section id="searchPanel" role="tabpanel">
+      <form id="searchForm" class="searchbar" role="search">
+        <input id="q" type="search" placeholder="Song or artist" autocomplete="off" enterkeyhint="search" aria-label="Song or artist">
+        <button class="btn" type="submit">Search</button>
+      </form>
+      <div id="results"></div>
+    </section>
+
+    <section id="queuePanel" role="tabpanel" hidden>
+      <div id="queue"></div>
+    </section>
+  </div>
+
+  <div class="reactions" aria-label="Reactions">
+    <div class="wrap" id="reactions">
+      <button type="button" aria-label="Applause">👏</button>
+      <button type="button" aria-label="Fire">🔥</button>
+      <button type="button" aria-label="Love">❤️</button>
+      <button type="button" aria-label="Laughing">😂</button>
+      <button type="button" aria-label="Microphone">🎤</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
